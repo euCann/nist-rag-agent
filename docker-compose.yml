@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  nist-rag-agent:
+    build: .
+    container_name: nist-rag-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - TOP_K_RESULTS=${TOP_K_RESULTS:-3}
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      - ./embeddings:/app/embeddings
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
