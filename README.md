@@ -1,33 +1,44 @@
 # NIST RAG Agent 🤖
 
 > Conversational AI assistant for NIST cybersecurity standards and OSCAL compliance, powered by Retrieval-Augmented Generation (RAG)
+> **Now with 530K+ training examples from 596 NIST publications** via [HuggingFace dataset](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![LangChain](https://img.shields.io/badge/LangChain-0.1+-green.svg)](https://www.langchain.com/)
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-Dataset-yellow)](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 🎯 What is This?
 
-A production-ready AI agent that answers questions about NIST cybersecurity frameworks (SP 800-53, 800-37, 800-171, etc.) using:
+A production-ready AI agent that answers questions about NIST cybersecurity frameworks using:
 - **RAG (Retrieval-Augmented Generation)** - Searches actual NIST documents, not hallucinations
+- **HuggingFace Dataset** - 596 NIST publications with 530K+ training examples
 - **LangChain** - Multi-tool agent with chat history
-- **FAISS** - Vector similarity search over 10+ NIST publications
-- **OpenAI/Azure OpenAI** - GPT-4 for intelligent responses
+- **FAISS** - Vector similarity search with cached indices
+- **OpenAI** - GPT-4 for intelligent responses
 
 Perfect for security assessors, compliance professionals, and anyone working with NIST standards.
 
 ## ✨ Features
 
-- 📚 **Pre-indexed NIST Documents**: 10+ publications ready to query
-  - NIST SP 800-53 Rev 5 (Security Controls)
-  - NIST SP 800-37 Rev 2 (Risk Management Framework)
-  - NIST SP 800-171 Rev 3 (CUI Protection)
-  - NIST SP 800-60, 800-63, 800-30, and more
-- 🔍 **Intelligent Tool Selection**: RAG → Control lookup → Web search fallback
+- 📚 **Comprehensive NIST Coverage**: 596 publications with 530K+ examples
+  - **FIPS** - Federal Information Processing Standards
+  - **SP 800 Series** - Security Controls (800-53), Risk Management (800-37), CUI (800-171), and more
+  - **SP 1800 Series** - NIST Practice Guides
+  - **CSWP Series** - Cybersecurity White Papers:
+    - ✨ NIST Cybersecurity Framework (CSF) 2.0
+    - ✨ Zero Trust Architecture (SP 800-207)
+    - ✨ Post-Quantum Cryptography guidance
+    - ✨ IoT Cybersecurity Labeling
+    - ✨ Privacy Framework v1.0
+  - **IR Series** - Interagency/Internal Reports
+- 🔄 **Automatic Dataset Updates** - HuggingFace integration keeps content current
+- 🔍 **Intelligent Tool Selection**: RAG → Control lookup → Document search → Web fallback
 - 💬 **Session-based Chat History**: Contextual conversations per user
-- 🎯 **Citation**: Always includes Control ID, Title, URL, Section
-- 🚀 **FastAPI Service**: REST API ready for integration
+- 🎯 **Quality Citations**: Includes source documents and metadata
+- 🚀 **FastAPI Service**: Production-ready REST API
 - 🐳 **Docker Ready**: Containerized deployment
+- ⚡ **Cached Indices**: Fast startup after first run
 
 ## 🚀 Quick Start
 
@@ -37,6 +48,7 @@ Perfect for security assessors, compliance professionals, and anyone working wit
 python >= 3.10
 openai >= 1.0
 langchain >= 0.1
+datasets >= 2.14.0  # For HuggingFace dataset
 ```
 
 ### Installation
@@ -50,8 +62,11 @@ cd nist-rag-agent
 pip install -r requirements.txt
 
 # Set up environment variables
-cp .env.example .env
-# Edit .env with your OpenAI API key
+export OPENAI_API_KEY="your-api-key-here"
+
+# Optional: Configure dataset usage
+export USE_HUGGINGFACE="true"      # Use HuggingFace dataset (default)
+export DATASET_SPLIT="train"        # Use training split (424K examples)
 ```
 
 ### Basic Usage
@@ -59,17 +74,35 @@ cp .env.example .env
 ```python
 from agent import NistRagAgent
 
-# Initialize the agent
+# Initialize the agent (first run downloads ~7GB dataset)
 agent = NistRagAgent()
 
-# Ask a question
+# Ask a question about latest NIST standards
 response = agent.query(
-    question="What does NIST say about access control?",
+    question="What's new in NIST Cybersecurity Framework 2.0?",
     session_id="user123"
 )
 
 print(response["answer"])
-# Includes citations: Control ID, Title, URL
+```
+
+### Example Queries
+
+```python
+# CSF 2.0 (new!)
+agent.query("What is the Govern function in CSF 2.0?")
+
+# Zero Trust Architecture (new!)
+agent.query("What are the core principles of Zero Trust?")
+
+# Security Controls
+agent.query("Explain control AC-2 in detail")
+
+# Post-Quantum Cryptography (new!)
+agent.query("What is NIST's guidance on post-quantum cryptography?")
+
+# Follow-up questions (uses context)
+agent.query("What are the implementation requirements?")
 ```
 
 ### Run as API Service
@@ -81,30 +114,83 @@ python api_service.py
 # Query via REST
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "Explain AC-1", "session_id": "user123"}'
+  -d '{"question": "What is Zero Trust Architecture?", "session_id": "user123"}'
+
+# Get agent statistics
+curl http://localhost:8000/stats
+
+# Interactive API docs
+open http://localhost:8000/docs
 ```
+
+### Legacy Mode (Local Embeddings)
+
+If you prefer to use local embeddings instead of the HuggingFace dataset:
+
+```python
+from agent import NistRagAgent
+
+# Use local embeddings
+agent = NistRagAgent(use_huggingface=False)
+```
+
+Or via environment variable:
+```bash
+export USE_HUGGINGFACE="false"
+python api_service.py
+```
+
+## � Dataset Information
+
+### HuggingFace Dataset
+The agent now uses the [ethanolivertroy/nist-cybersecurity-training](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training) dataset with:
+
+| Metric | Value |
+|--------|-------|
+| **Total Examples** | 530,912 |
+| **Training Split** | 424,729 examples |
+| **Validation Split** | 106,183 examples |
+| **NIST Publications** | 596 documents |
+| **Document Sections** | 263,252 |
+| **Security Controls** | 88,126 |
+| **Definitions** | 43,214 |
+| **Validated Links** | 61,480 |
+
+### Dataset Coverage
+- **FIPS** - Federal Information Processing Standards
+- **SP 800 Series** - Full collection (53 documents)
+- **SP 1800 Series** - NIST Practice Guides
+- **CSWP Series** - Cybersecurity White Papers (NEW!)
+  - NIST CSF 2.0
+  - Zero Trust Architecture
+  - Post-Quantum Cryptography
+  - IoT Security
+  - Privacy Framework
+- **IR Series** - Interagency/Internal Reports
+
+### First Run Setup
+- **Download**: ~7GB dataset (one-time)
+- **Indexing**: 10-20 minutes to create FAISS index
+- **Subsequent Runs**: <30 seconds (uses cache)
 
 ## 📁 Project Structure
 
 ```
 nist-rag-agent/
-├── agent.py                 # Core RAG agent implementation
+├── agent.py                 # Core RAG agent (now with HuggingFace support)
 ├── api_service.py          # FastAPI REST service
-├── embeddings/             # Pre-built NIST document embeddings
-│   ├── NIST.SP.800-53r5.chunks.json
-│   ├── NIST.SP.800-53r5.chunks.npy
-│   └── ... (10+ documents)
-├── tools/                  # Custom LangChain tools
-│   ├── nist_lookup.py
-│   ├── control_detail.py
-│   └── web_search.py
+├── .cache/                 # HuggingFace dataset cache (auto-created)
+│   └── huggingface/
+│       ├── datasets/       # Downloaded dataset
+│       └── faiss_index_*/  # Cached FAISS indices
+├── embeddings/             # Legacy: Local NIST embeddings (optional)
+│   ├── README.md
+│   └── ... (local files)
 ├── examples/              # Usage examples
 │   ├── basic_query.py
-│   ├── batch_analysis.py
-│   └── session_demo.py
-├── tests/                 # Test suite
-├── requirements.txt
-├── .env.example
+│   ├── session_demo.py
+│   └── api_client.py
+├── requirements.txt       # Now includes 'datasets' package
 ├── Dockerfile
 └── README.md
 ```

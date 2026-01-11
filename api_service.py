@@ -1,6 +1,7 @@
 """
 NIST RAG Agent - FastAPI REST Service
 Production-ready API for querying NIST standards.
+Now with HuggingFace dataset support (530K+ examples from 596 publications)
 """
 
 import os
@@ -25,9 +26,33 @@ agent: Optional[NistRagAgent] = None
 async def lifespan(app: FastAPI):
     """Initialize agent on startup."""
     global agent
-    print("Initializing NIST RAG Agent...")
-    agent = NistRagAgent()
-    print("Agent ready!")
+    print("="*70)
+    print("NIST RAG Agent API - Starting Up")
+    print("="*70)
+    
+    # Check if HuggingFace dataset should be used
+    use_huggingface = os.getenv("USE_HUGGINGFACE", "true").lower() == "true"
+    
+    if use_huggingface:
+        print("\n⏳ Using HuggingFace dataset (530K+ examples)")
+        print("   First run will download dataset (~7GB)")
+    else:
+        print("\n⏳ Using local embeddings") with 596 NIST publications",
+    version="2
+    agent = NistRagAgent(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+        top_k=int(os.getenv("TOP_K", "5")),
+        use_huggingface=use_huggingface,
+        dataset_split=os.getenv("DATASET_SPLIT", "train")
+    )
+    
+    stats = agent.get_stats()
+    print("\n✓ Agent ready!")
+    print("\n📊 Stats:")
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
+    print()
+    
     yield
     # Cleanup on shutdown
     agent = None
@@ -54,9 +79,11 @@ app.add_middleware(
 # Request/Response Models
 class QueryRequest(BaseModel):
     """Query request model."""
-    question: str = Field(..., description="Question about NIST standards")
-    session_id: str = Field(default="default", description="Session ID for chat history")
-
+    question: str = 2.0.0",
+        "dataset": "ethanolivertroy/nist-cybersecurity-training (596 publications, 530K+ examples)",
+        "docs": "/docs",
+        "health": "/health",
+        "stats": "/stats
 
 class QueryResponse(BaseModel):
     """Query response model."""
@@ -66,9 +93,18 @@ class QueryResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Health check response."""
-    status: str
-    version: str
+    """Health che2.0.0",
+        model=agent.model
+    )
+
+
+@app.get("/stats", response_model=dict)
+async def get_stats():
+    """Get agent statistics."""
+    if agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized")
+    
+    return agent.get_stats(version: str
     model: str
 
 

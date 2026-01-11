@@ -2,28 +2,34 @@
 
 ## 🎉 NIST RAG Agent - Ready for GitHub!
 
-Your production-ready RAG agent is complete and ready to publish.
+Your production-ready RAG agent is complete and ready to publish with **HuggingFace dataset integration**.
 
 ### 📦 What's Included
 
 ```
 nist-rag-agent/
-├── README.md                  # Comprehensive documentation with badges
-├── QUICKSTART.md             # Fast setup guide
+├── README.md                  # Comprehensive documentation (updated with HuggingFace info)
+├── QUICKSTART.md             # Fast setup guide (updated)
+├── MIGRATION_GUIDE.md        # HuggingFace dataset migration guide (new)
 ├── LICENSE                   # MIT License
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Python dependencies (includes 'datasets')
 ├── .env.example             # Environment template
 ├── .gitignore               # Git ignore rules
 ├── setup.sh                 # Automated setup script
 │
-├── agent.py                 # Core RAG agent (390 lines)
-├── api_service.py          # FastAPI REST service
+├── agent.py                 # Core RAG agent with HuggingFace support
+├── api_service.py          # FastAPI REST service (updated)
 ├── Dockerfile              # Container image
 ├── docker-compose.yml      # Orchestration
 │
-├── embeddings/             # NIST document embeddings
+├── .cache/                 # HuggingFace dataset cache (auto-created)
+│   └── huggingface/
+│       ├── datasets/       # Downloaded dataset (~7GB)
+│       └── faiss_index_*/  # Cached FAISS indices
+│
+├── embeddings/             # Legacy: Local NIST embeddings (optional)
 │   ├── README.md
-│   └── *.chunks.json       # 10+ NIST publications
+│   └── *.chunks.json       # 10+ NIST publications (fallback)
 │
 └── examples/               # Usage examples
     ├── README.md
@@ -39,15 +45,22 @@ nist-rag-agent/
    - Session management
    - Health checks
    - Docker deployment
+   - HuggingFace dataset integration
+   - Backward compatible with local embeddings
 
 2. **Comprehensive Documentation**
-   - Main README with badges and examples
-   - Quick start guide
+   - Main README with badges and HuggingFace dataset info
+   - Quick start guide (updated)
+   - Migration guide for dataset usage
    - API documentation
    - Usage examples
 
-3. **Real NIST Data**
-   - 10+ NIST publications embedded
+3. **Massive NIST Coverage**
+   - **596 NIST publications** (via HuggingFace)
+   - **530K+ training examples**
+   - FIPS, SP 800/1800, IR, CSWP series
+   - Includes: CSF 2.0, Zero Trust, PQC, IoT
+   - Automatic updates via HuggingFace
    - SP 800-53, 800-37, 800-171, etc.
    - Auto-builds FAISS index
 

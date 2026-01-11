@@ -11,13 +11,18 @@ cd nist-rag-agent
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
+# Install dependencies (includes HuggingFace datasets)
 pip install -r requirements.txt
 
 # Configure environment
-cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY
+export OPENAI_API_KEY="your-api-key-here"
+
+# Optional: Configure dataset usage
+export USE_HUGGINGFACE="true"    # Use HuggingFace dataset (default, 530K+ examples)
+export DATASET_SPLIT="train"      # Use training split (424K examples)
 ```
+
+**Note**: First run will download ~7GB HuggingFace dataset (one-time, 5-15 minutes) and create FAISS index (10-20 minutes). Subsequent runs are instant (<30 seconds).
 
 ### 2. Run Basic Example
 
@@ -27,13 +32,34 @@ python examples/basic_query.py
 
 Expected output:
 ```
+⏳ Using HuggingFace dataset (530K+ examples)
+✓ Loaded 424,729 examples from NIST dataset
+Creating FAISS index...
+
 Q: What does NIST say about access control?
 A: According to NIST SP 800-53 Rev 5, **AC-1** (Access Control Policy and 
 Procedures) requires organizations to develop, document, and disseminate 
 access control policies...
 ```
 
-### 3. Start API Service
+### 3. Try New Capabilities
+
+```python
+from agent import NistRagAgent
+
+agent = NistRagAgent()
+
+# Ask about CSF 2.0 (new!)
+agent.query("What's new in NIST Cybersecurity Framework 2.0?")
+
+# Zero Trust Architecture (new!)
+agent.query("What are the core principles of Zero Trust?")
+
+# Post-Quantum Cryptography (new!)
+agent.query("What is NIST's guidance on post-quantum cryptography?")
+```
+
+### 4. Start API Service
 
 ```bash
 python api_service.py
@@ -41,15 +67,19 @@ python api_service.py
 
 Visit http://localhost:8000/docs for interactive API documentation.
 
-### 4. Query via API
+### 5. Query via API
 
 ```bash
+# Basic query
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is AC-1?", "session_id": "demo"}'
+  -d '{"question": "What is Zero Trust Architecture?", "session_id": "demo"}'
+
+# Get agent statistics
+curl http://localhost:8000/stats
 ```
 
-### 5. Docker Deployment
+### 6. Docker Deployment
 
 ```bash
 # Build and run
@@ -62,12 +92,36 @@ docker-compose logs -f
 curl http://localhost:8000/health
 ```
 
+### 7. Legacy Mode (Local Embeddings)
+
+If you prefer to use local embeddings instead of the HuggingFace dataset:
+
+```bash
+export USE_HUGGINGFACE="false"
+python api_service.py
+```
+
+Or in code:
+```python
+agent = NistRagAgent(use_huggingface=False)
+```
+
 ## Next Steps
 
-- Read [examples/README.md](examples/README.md) for usage patterns
-- See main [README.md](README.md) for advanced configuration
-- Check [api_service.py](api_service.py) for API endpoints
+- Read [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for dataset details
+- See [examples/README.md](examples/README.md) for usage patterns
+- Check main [README.md](README.md) for advanced configuration
 - Explore [agent.py](agent.py) for customization options
+
+## Dataset Information
+
+**HuggingFace Dataset**: [ethanolivertroy/nist-cybersecurity-training](https://huggingface.co/datasets/ethanolivertroy/nist-cybersecurity-training)
+
+- **596 NIST publications**
+- **530K+ training examples**
+- Includes: FIPS, SP 800/1800, IR, CSWP (CSF 2.0, Zero Trust, PQC)
+- First run: ~30 min setup (one-time)
+- Subsequent runs: <30 sec startup
 
 ## Common Issues
 
