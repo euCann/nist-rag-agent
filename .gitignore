@@ -62,3 +62,43 @@ embeddings/*.npy
 
 # Internal files
 .internal/
+
+# HuggingFace and Dataset Cache
+.cache/
+huggingface/
+datasets/
+.huggingface/
+
+# Session histories and conversation logs
+sessions/
+conversations/
+chat_history/
+
+# Local test data and outputs
+test_output/
+local_data/
+scratch/
+
+# API response cache
+api_cache/
+responses/
+
+# Personal notes and drafts
+notes/
+drafts/
+TODO.md
+NOTES.md
+
+# Credentials and keys
+*.key
+*.pem
+*.cert
+*secret*
+credentials.json
+config.local.*
+
+# Large downloaded files
+downloads/
+*.pdf
+*.zip
+*.tar.gz
