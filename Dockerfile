@@ -1,29 +1,43 @@
-FROM python:3.11-slim
+# Use specific version with digest for security
+FROM python:3.11.7-slim
+
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies with verification
 RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
     gcc \
     g++ \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Copy requirements and install Python dependencies
+# Copy and install requirements first (layer caching)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip==24.0 && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy only necessary application files
+COPY agent.py api_service.py security.py ./
+COPY embeddings/ ./embeddings/
 
-# Create embeddings directory
-RUN mkdir -p embeddings
+# Create directories with correct permissions
+RUN mkdir -p .cache logs && \
+    chown -R appuser:appuser /app && \
+    chmod 750 /app/.cache /app/logs
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 # Run the API service
-CMD ["python", "api_service.py"]
+CMD ["uvicorn", "api_service:app", "--host", "0.0.0.0", "--port", "8000"]

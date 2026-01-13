@@ -68,16 +68,30 @@ class NistRagAgent:
         if not self.api_key:
             raise ValueError("OpenAI API key required. Set OPENAI_API_KEY or pass openai_api_key")
         
+        # Configure logging to prevent API key exposure
+        import logging
+        logging.getLogger("openai").setLevel(logging.WARNING)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        
         self.model = model
         self.top_k = top_k
         self.use_huggingface = use_huggingface and HUGGINGFACE_AVAILABLE
         self.dataset_split = dataset_split
         
-        # Set up cache directory for HuggingFace
+        # Set up cache directory for HuggingFace with security validation
         if cache_dir is None:
             cache_dir = Path(__file__).parent / ".cache" / "huggingface"
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            cache_dir = Path(cache_dir).resolve()
+            # Ensure within allowed paths (prevent directory traversal)
+            allowed_base = Path(__file__).parent.resolve()
+            try:
+                cache_dir.relative_to(allowed_base)
+            except ValueError:
+                raise ValueError(f"Cache directory must be within {allowed_base}")
+        
+        self.cache_dir = cache_dir
+        os.makedirs(self.cache_dir, mode=0o750, exist_ok=True)  # Restrictive permissions
         
         # Set up embeddings directory (legacy support)
         if embeddings_dir is None:
@@ -292,10 +306,13 @@ class NistRagAgent:
         
         agent = create_tool_calling_agent(self.llm, self.tools, prompt)
         
+        # Disable verbose in production to prevent log exposure
+        is_production = os.getenv("ENVIRONMENT", "development") == "production"
+        
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
+            verbose=not is_production,  # Only verbose in development
             handle_parsing_errors=True,
             max_iterations=5
         @tool("search_by_document")
@@ -551,10 +568,13 @@ class NistRagAgent:
         
         agent = create_tool_calling_agent(self.llm, self.tools, prompt)
         
+        # Disable verbose in production to prevent log exposure
+        is_production = os.getenv("ENVIRONMENT", "development") == "production"
+        
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
+            verbose=not is_production,  # Only verbose in development
             handle_parsing_errors=True
         )
     
@@ -573,12 +593,19 @@ class NistRagAgent:
         Query the NIST RAG agent.
         
         Args:
-            question: User's question about NIST standards
-            session_id: Session identifier for chat history
+            question: User's question about NIST standards (already sanitized by API layer)
+            session_id: Session identifier for chat history (already sanitized by API layer)
             
         Returns:
             Dict with 'answer' and metadata
         """
+        # Input should already be sanitized by API layer, but validate basics
+        if not question or len(question) > 2000:
+            raise ValueError("Invalid question length")
+        
+        if not session_id or len(session_id) > 64:
+            raise ValueError("Invalid session ID")
+        
         chat_history = self._get_chat_history(session_id)
         
         result = self.agent_executor.invoke({
@@ -598,6 +625,10 @@ class NistRagAgent:
     
     def clear_history(self, session_id: str = "default"):
         """Clear chat history for a session."""
+        # Validate session_id (defense in depth)
+        if not session_id or len(session_id) > 64:
+            raise ValueError("Invalid session ID")
+        
         if session_id in self.session_histories:
             self.session_histories[session_id].clear()
 

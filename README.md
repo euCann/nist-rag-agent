@@ -39,6 +39,28 @@ Perfect for security assessors, compliance professionals, and anyone working wit
 - 🚀 **FastAPI Service**: Production-ready REST API
 - 🐳 **Docker Ready**: Containerized deployment
 - ⚡ **Cached Indices**: Fast startup after first run
+- 📓 **Interactive Tutorial**: Jupyter notebook for learning RAG concepts
+
+## 🎓 Learning Resources
+
+### Interactive Tutorial
+New to RAG or want to understand how this agent works? Check out our comprehensive Jupyter notebook tutorial:
+
+**[RAG_Tutorial.ipynb](RAG_Tutorial.ipynb)** - Interactive guide covering:
+- 🧠 What is RAG? Explained with simple analogies
+- 🌟 Why RAG is better than regular AI (no hallucinations!)
+- 🔧 How the NIST RAG Agent works under the hood
+- 💻 Step-by-step setup and usage examples
+- 💼 Real-world scenarios and best practices
+- 📊 Understanding responses and citations
+
+**Perfect for:**
+- Non-technical users wanting to understand RAG
+- Developers learning to use the agent
+- Teams needing training materials
+- Anyone wanting hands-on practice
+
+Simply open the notebook in Jupyter or VS Code and follow along!
 
 ## 🚀 Quick Start
 
