@@ -1,15 +1,14 @@
 """
-NIST RAG Agent - Core Implementation
-A conversational AI agent for NIST cybersecurity standards using RAG.
-Now powered by the ethanolivertroy/nist-cybersecurity-training dataset with 530K+ examples.
+NIST RAG Agent V2 - Enhanced Implementation with HuggingFace Dataset
+A conversational AI agent using the ethanolivertroy/nist-cybersecurity-training dataset
+with 530K+ training examples from 596 NIST publications.
 """
 
 import os
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.tools import tool
@@ -18,109 +17,239 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.tools.ddg_search import DuckDuckGoSearchRun
 from langchain.memory import ChatMessageHistory
 from langchain.agents import create_tool_calling_agent, AgentExecutor
+from datasets import load_dataset
+import numpy as np
 
-try:
-    from datasets import load_dataset
-    HUGGINGFACE_AVAILABLE = True
-except ImportError:
-    HUGGINGFACE_AVAILABLE = False
-    print("Warning: 'datasets' package not installed. Install with: pip install datasets")
+# Import model configuration utilities
+from model_config import (
+    ModelConfig, EmbeddingConfig,
+    create_llm, create_embeddings,
+    get_preset_config, get_preset_embeddings
+)
 
 
-class NistRagAgent:
+class NistRagAgentV2:
     """
-    Conversational AI agent for NIST/OSCAL standards using RAG.
+    Enhanced NIST RAG Agent V2 using HuggingFace Dataset.
     
     Features:
-    - Vector search over 596 NIST publications (530K+ examples via HuggingFace dataset)
-    - Multi-tool agent (RAG, control lookup, document search, web search)
+    - 530K+ training examples from 596 NIST publications
+    - FIPS, SP (800/1800), IR, and CSWP series coverage
+    - Pre-computed embeddings with FAISS indexing
+    - Multi-tool agent (RAG, control lookup, web search)
     - Session-based chat history
-    - Intelligent citation with Control ID, Title, URL
-    - Comprehensive coverage: FIPS, SP 800/1800, IR, CSWP (including CSF 2.0)
+    - Citation with source documents and metadata
+    
+    New in V2:
+    - HuggingFace dataset integration
+    - Support for CSWP (Cybersecurity White Papers)
+    - Enhanced metadata extraction from dataset
+    - Improved chunking with semantic coherence
     """
     
     def __init__(
         self,
-        embeddings_dir: Optional[Path] = None,
-        openai_api_key: Optional[str] = None,
-        model: str = "gpt-4o",
+        cache_dir: Optional[Path] = None,
+        model_config: Optional[Union[ModelConfig, str]] = None,
+        embedding_config: Optional[Union[EmbeddingConfig, str]] = None,
         top_k: int = 5,
-        use_huggingface: bool = True,
+        use_precomputed_embeddings: bool = False,
         dataset_split: str = "train",
-        cache_dir: Optional[Path] = None
+        # Deprecated params for backward compatibility
+        openai_api_key: Optional[str] = None,
+        model: Optional[str] = None,
     ):
         """
-        Initialize the NIST RAG Agent.
+        Initialize the NIST RAG Agent V2 (Provider Agnostic).
         
         Args:
-            embeddings_dir: Directory containing local NIST document embeddings (legacy)
-            openai_api_key: OpenAI API key (or set OPENAI_API_KEY env var)
-            model: OpenAI model to use (default: gpt-4o)
+            cache_dir: Directory to cache the HuggingFace dataset
+            model_config: ModelConfig instance or preset name (e.g., 'openai-gpt4', 'anthropic-claude')
+            embedding_config: EmbeddingConfig instance or preset name (e.g., 'openai', 'huggingface')
             top_k: Number of similar chunks to retrieve
-            use_huggingface: Use HuggingFace dataset (530K+ examples from 596 publications)
+            use_precomputed_embeddings: Use precomputed embeddings from dataset
             dataset_split: Dataset split to use ('train' or 'valid')
-            cache_dir: Cache directory for HuggingFace dataset
+            openai_api_key: [DEPRECATED] Use model_config instead
+            model: [DEPRECATED] Use model_config instead
+            
+        Examples:
+            # Using presets
+            agent = NistRagAgentV2(model_config="openai-gpt4", embedding_config="openai")
+            agent = NistRagAgentV2(model_config="anthropic-claude", embedding_config="huggingface")
+            agent = NistRagAgentV2(model_config="ollama-llama3", embedding_config="ollama")
+            
+            # Using custom configs
+            agent = NistRagAgentV2(
+                model_config=ModelConfig(provider="openai", model_name="gpt-4"),
+                embedding_config=EmbeddingConfig(provider="openai", model_name="text-embedding-3-small")
+            )
         """
         # Load environment variables
         load_dotenv()
         
-        self.api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        if not self.api_key:
-            raise ValueError("OpenAI API key required. Set OPENAI_API_KEY or pass openai_api_key")
+        # Handle backward compatibility
+        if model_config is None:
+            if model or openai_api_key:
+                print("⚠️  Warning: 'model' and 'openai_api_key' parameters are deprecated.")
+                print("   Use model_config='openai-gpt4' or ModelConfig(...) instead.")
+                from model_config import ModelConfig
+                model_config = ModelConfig(
+                    provider="openai",
+                    model_name=model or "gpt-4o",
+                    api_key=openai_api_key
+                )
+            else:
+                # Default to OpenAI GPT-4o
+                model_config = "openai-gpt4"
         
-        # Configure logging to prevent API key exposure
-        import logging
-        logging.getLogger("openai").setLevel(logging.WARNING)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
+        # Handle string presets
+        if isinstance(model_config, str):
+            model_config = get_preset_config(model_config)
         
-        self.model = model
+        if embedding_config is None:
+            embedding_config = "openai"  # Default
+        
+        if isinstance(embedding_config, str):
+            embedding_config = get_preset_embeddings(embedding_config)
+        
+        # Store configs
+        self.model_config = model_config
+        self.embedding_config = embedding_config
         self.top_k = top_k
-        self.use_huggingface = use_huggingface and HUGGINGFACE_AVAILABLE
         self.dataset_split = dataset_split
+        self.use_precomputed_embeddings = use_precomputed_embeddings
         
-        # Set up cache directory for HuggingFace with security validation
+        # Set up cache directory
         if cache_dir is None:
             cache_dir = Path(__file__).parent / ".cache" / "huggingface"
-        else:
-            cache_dir = Path(cache_dir).resolve()
-            # Ensure within allowed paths (prevent directory traversal)
-            allowed_base = Path(__file__).parent.resolve()
-            try:
-                cache_dir.relative_to(allowed_base)
-            except ValueError:
-                raise ValueError(f"Cache directory must be within {allowed_base}")
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        self.cache_dir = cache_dir
-        os.makedirs(self.cache_dir, mode=0o750, exist_ok=True)  # Restrictive permissions
+        # Initialize provider-agnostic components
+        print(f"🤖 Initializing LLM: {model_config.provider} - {model_config.model_name}")
+        print(f"📊 Initializing embeddings: {embedding_config.provider} - {embedding_config.model_name}")
         
-        # Set up embeddings directory (legacy support)
-        if embeddings_dir is None:
-            embeddings_dir = Path(__file__).parent / "embeddings"
-        self.embeddings_dir = Path(embeddings_dir)
-        
-        # Initialize components
-        self.embeddings = OpenAIEmbeddings()
-        self.llm = ChatOpenAI(model=self.model, temperature=0)
+        self.embeddings = create_embeddings(embedding_config)
+        self.llm = create_llm(model_config)
         self.session_histories: Dict[str, ChatMessageHistory] = {}
-        self.dataset = None
         
-        # Load or create vector store
-        self.vectorstore = self._load_vectorstore()
+        # Load dataset and create vector store
+        print(f"Loading NIST cybersecurity dataset (split: {dataset_split})...")
+        self.dataset = self._load_dataset()
+        self.vectorstore = self._create_vectorstore()
         self.retriever = self.vectorstore.as_retriever(search_kwargs={"k": self.top_k})
         
         # Set up tools and agent
         self.tools = self._create_tools()
         self.agent_executor = self._create_agent()
         
-    def _load_vectorstore(self) -> FAISS:
-        """Load FAISS vector store from HuggingFace dataset or local embeddings."""
-        if self.use_huggingface:
-            return self._load_vectorstore_from_huggingface()
-        else:
-            return self._load_vectorstore_from_local()
+    def _load_dataset(self):
+        """Load the NIST cybersecurity training dataset from HuggingFace."""
+        try:
+            dataset = load_dataset(
+                "ethanolivertroy/nist-cybersecurity-training",
+                split=self.dataset_split,
+                cache_dir=str(self.cache_dir)
+            )
+            print(f"✓ Loaded {len(dataset)} examples from NIST dataset")
+            return dataset
+        except Exception as e:
+            print(f"Error loading dataset: {e}")
+            raise
     
-    def _load_vectorstore_from_huggingface(self) -> FAISS:
-        """Load FAISS vector store from HuggingFace dataset."""
+    def _extract_metadata_from_example(self, example: Dict) -> Dict[str, Any]:
+        """Extract metadata from dataset example."""
+        metadata = {}
+        
+        # Try to parse metadata field if it exists
+        if "metadata" in example and example["metadata"]:
+            import json
+            try:
+                if isinstance(example["metadata"], str):
+                    meta = json.loads(example["metadata"])
+                else:
+                    meta = example["metadata"]
+                
+                metadata.update({
+                    "source": meta.get("source", "Unknown"),
+                    "type": meta.get("type", "section"),
+                    "chunk_id": meta.get("chunk_id", 0)
+                })
+            except:
+                pass
+        
+        # Extract from messages if available
+        if "messages" in example:
+            messages = example["messages"]
+            if isinstance(messages, str):
+                import json
+                try:
+                    messages = json.loads(messages)
+                except:
+                    messages = []
+            
+            # Look for source information in assistant message
+            for msg in messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    # Try to extract source from "According to..." pattern
+                    if "According to" in content:
+                        import re
+                        match = re.search(r'According to ([^,]+)', content)
+                        if match and "source" not in metadata:
+                            metadata["source"] = match.group(1).strip()
+        
+        return metadata
+    
+    def _create_documents_from_dataset(self) -> List[Document]:
+        """Convert dataset examples to LangChain documents."""
+        documents = []
+        
+        print("Processing dataset examples...")
+        for idx, example in enumerate(self.dataset):
+            if idx % 10000 == 0:
+                print(f"  Processed {idx}/{len(self.dataset)} examples...")
+            
+            # Extract content - dataset has 'text' field directly
+            content = ""
+            if "text" in example:
+                content = example["text"]
+            elif "messages" in example:
+                # Fallback: try messages format
+                messages = example["messages"]
+                if isinstance(messages, str):
+                    import json
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        continue
+                
+                # Concatenate user and assistant messages as content
+                for msg in messages:
+                    if msg.get("role") in ["user", "assistant"]:
+                        msg_content = msg.get("content", "")
+                        if msg_content:
+                            content += msg_content + "\n\n"
+            
+            if not content or not content.strip():
+                continue
+            
+            # Extract metadata
+            metadata = self._extract_metadata_from_example(example)
+            metadata["dataset_index"] = idx
+            
+            # Create document
+            doc = Document(
+                page_content=content.strip(),
+                metadata=metadata
+            )
+            documents.append(doc)
+        
+        print(f"✓ Created {len(documents)} documents from dataset")
+        return documents
+    
+    def _create_vectorstore(self) -> FAISS:
+        """Create FAISS vector store from dataset."""
         # Check for cached FAISS index
         faiss_path = self.cache_dir / f"faiss_index_{self.dataset_split}"
         
@@ -133,35 +262,17 @@ class NistRagAgent:
                     allow_dangerous_deserialization=True
                 )
             except Exception as e:
-                print(f"Failed to load cached index: {e}. Creating new index...")
-        
-        # Load dataset from HuggingFace
-        print(f"Loading NIST dataset from HuggingFace (split: {self.dataset_split})...")
-        print("⏳ First run will download ~7GB. Subsequent runs use cache.")
-        
-        try:
-            self.dataset = load_dataset(
-                "ethanolivertroy/nist-cybersecurity-training",
-                split=self.dataset_split,
-                cache_dir=str(self.cache_dir)
-            )
-            print(f"✓ Loaded {len(self.dataset):,} examples from NIST dataset")
-        except Exception as e:
-            print(f"❌ Failed to load HuggingFace dataset: {e}")
-            print("Falling back to local embeddings...")
-            self.use_huggingface = False
-            return self._load_vectorstore_from_local()
+                print(f"Failed to load cached index: {e}")
+                print("Creating new index...")
         
         # Create documents from dataset
         documents = self._create_documents_from_dataset()
         
         if not documents:
-            print("No documents created. Falling back to local embeddings...")
-            self.use_huggingface = False
-            return self._load_vectorstore_from_local()
+            raise ValueError("No documents created from dataset")
         
         # Create FAISS index with batching for large datasets
-        print("Creating FAISS index (this may take 10-20 minutes on first run)...")
+        print("Creating FAISS index (this may take a while)...")
         batch_size = 1000
         vectorstore = None
         
@@ -181,42 +292,20 @@ class NistRagAgent:
         
         return vectorstore
     
-    def _load_vectorstore_from_local(self) -> FAISS:
-        """Load FAISS vector store from local embeddings directory (legacy)."""
-        faiss_index_path = self.embeddings_dir / "faiss_index"
+    def _create_tools(self) -> List:
+        """Create LangChain tools for the agent."""
         
-        if faiss_index_path.exists():
-            print(f"Loading existing FAISS index from {faiss_index_path}")
-            return FAISS.load_local(
-                str(faiss_index_path),
-                self.embeddings,
-                allow_dangerous_deserialization=True
-            )
-        
-        # Load from JSON chunks and create new index
-        print("Creating new FAISS index from local embeddings...")
-        documents = self._load_nist_documents()
-        
-        if not documents:
-            print("Warning: No NIST documents found. Using mock data for demo.")
-            documents = self._create_mock_documents()
-        
-        vectorstore = FAISS.from_documents(documents, self.embeddings)
-        
-        # Save the index for future use
-        faiss_index_path.parent.mkdir(parents=True, exist_ok=True)
-        vectorstore.save_local(str(faiss_index_path))
-        
-        return vectorstore
-    
-    def _create_documen cybersecurity standards and guidance.
+        @tool("nist_lookup")
+        def nist_lookup(query: str) -> str:
+            """
+            Search NIST cybersecurity standards and guidance.
             Use for any NIST, OSCAL, or cybersecurity compliance question.
             Covers 596 NIST publications including:
             - FIPS (Federal Information Processing Standards)
             - SP 800 series (Security Controls, Risk Management, etc.)
             - SP 1800 series (Practice Guides)
             - IR (Interagency/Internal Reports)
-            - CSWP (Cybersecurity White Papers, including CSF 2.0, Zero Trust, PQC)
+            - CSWP (Cybersecurity White Papers, including CSF 2.0)
             
             Returns relevant content with source citations.
             """
@@ -237,23 +326,16 @@ class NistRagAgent:
                     continue
                 seen_sources.add(source)
                 
-                control_id = meta.get('control_id', '')
-                title = meta.get('title', '')
                 chunk_type = meta.get('type', 'section')
-                section = meta.get('section', '')
                 
                 result = f"""
 **Source**: {source}
 **Type**: {chunk_type}
+**Content**:
+{doc.page_content[:800]}...
+
+---
 """
-                if control_id:
-                    result += f"**Control ID**: {control_id}\n"
-                if title:
-                    result += f"**Title**: {title}\n"
-                if section:
-                    result += f"**Section**: {section}\n"
-                
-                result += f"**Content**:\n{doc.page_content[:800]}...\n\n---\n"
                 results.append(result)
             
             return "\n".join(results)
@@ -273,48 +355,26 @@ class NistRagAgent:
                 return f"No details found for control {control_id}. Try using nist_lookup for broader search."
             
             # Filter for most relevant
-        system_message = "You are a highly knowledgeable NIST cybersecurity expert assistant. "
+            relevant_docs = []
+            for doc in docs:
+                if control_id.upper() in doc.page_content.upper():
+                    relevant_docs.append(doc)
+            
+            if not relevant_docs:
+                relevant_docs = docs[:1]
+            
+            doc = relevant_docs[0]
+            meta = doc.metadata
+            
+            return f"""
+**Control ID**: {control_id}
+**Source**: {meta.get('source', 'NIST SP 800-53')}
+**Type**: {meta.get('type', 'control')}
+
+**Details**:
+{doc.page_content[:1000]}
+"""
         
-        if self.use_huggingface:
-            system_message += (
-                "You have access to 596 NIST publications with 530,000+ training examples including:\n"
-                "- FIPS (Federal Information Processing Standards)\n"
-                "- SP 800 series (Security Controls, Risk Management, Cryptography, etc.)\n"
-                "- SP 1800 series (Practice Guides)\n"
-                "- NIST Cybersecurity Framework (CSF) 2.0\n"
-                "- CSWP (Cybersecurity White Papers on Zero Trust, PQC, IoT, etc.)\n"
-                "- IR (Interagency/Internal Reports)\n\n"
-            )
-        else:
-            system_message += (
-                "You have access to key NIST publications including SP 800-53, 800-37, 800-171, and more.\n\n"
-            )
-        
-        system_message += (
-            "Prioritize tools: 1) nist_lookup 2) control_lookup 3) search_by_document 4) web search\n"
-            "Always cite sources clearly with document names.\n"
-            "Format control IDs in bold (e.g., **AC-1**).\n"
-            "Be precise, thorough, and cite specific NIST guidance when available."
-        )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(system_message),
-            MessagesPlaceholder(variable_name="chat_history"),
-            HumanMessage("{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-        
-        agent = create_tool_calling_agent(self.llm, self.tools, prompt)
-        
-        # Disable verbose in production to prevent log exposure
-        is_production = os.getenv("ENVIRONMENT", "development") == "production"
-        
-        return AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            verbose=not is_production,  # Only verbose in development
-            handle_parsing_errors=True,
-            max_iterations=5
         @tool("search_by_document")
         def search_by_document(document_name: str) -> str:
             """
@@ -340,226 +400,31 @@ class NistRagAgent:
 {doc.page_content[:600]}...
 ---
 """)
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get statistics about the agent and dataset."""
-        stats = {
-            "model": self.model,
-            "top_k": self.top_k,
-            "active_sessions": len(self.session_histories),
-            "using_huggingface": self.use_huggingface
-        }
-        
-        if self.use_huggingface and self.dataset:
-            stats.update({
-                "total_examples": len(self.dataset),
-                "dataset_split": self.dataset_split,
-                "cache_dir": str(self.cache_dir)
-            })
-        else:
-            stats.update({
-                "embeddings_dir": str(self.embeddings_dir)
-            })
-        
-        return stats
             
             return "\n".join(results) if results else f"No content found for {document_name}"
         
         # Web search fallback
         web_search = DuckDuckGoSearchRun()
         
-        return [nist_lookup, control_lookup, search_by_document, "section"),
-                    "chunk_id": meta.get("chunk_id", 0)
-                })
-            except:
-                pass
+        return [nist_lookup, control_lookup, search_by_document, web_search]
+    
+    def _create_agent(self) -> AgentExecutor:
+        """Create the LangChain agent with tools."""
         
-        # Extract from messages if available
-        if "messages" in example:
-            messages = example["messages"]
-            if isinstance(messages, str):
-                import json
-                try:
-                    messages = json.loads(messages)
-                except:
-                    messages = []
-            
-            # Look for source in assistant message
-            for msg in messages:
-                if msg.get("role") == "assistant":
-                    content = msg.get("content", "")
-                    if "According to" in content:
-                        import re
-                        match = re.search(r'According to ([^,]+)', content)
-                        if match and "source" not in metadata:
-                            metadata["source"] = match.group(1).strip()
-        
-        return metadata
-    
-    def _load_nist_documents(self) -> List[Document]:
-        """Load NIST documents from JSON chunk files."""
-        import json
-        
-        documents = []
-        
-        if not self.embeddings_dir.exists():
-            return documents
-        
-        # Look for all .chunks.json files
-        for json_file in self.embeddings_dir.glob("*.chunks.json"):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    chunks = json.load(f)
-                
-                doc_name = json_file.stem.replace('.chunks', '')
-                
-                for chunk in chunks:
-                    doc = Document(
-                        page_content=chunk.get('text', ''),
-                        metadata={
-                            'source': doc_name,
-                            'chunk_id': chunk.get('chunk_id', ''),
-                            'section': chunk.get('section', ''),
-                            'control_id': chunk.get('control_id', ''),
-                            'title': chunk.get('title', '')
-                        }
-                    )
-                    documents.append(doc)
-                
-                print(f"Loaded {len(chunks)} chunks from {doc_name}")
-            
-            except Exception as e:
-                print(f"Error loading {json_file}: {e}")
-        
-        return documents
-    
-    def _create_mock_documents(self) -> List[Document]:
-        """Create mock NIST documents for demo purposes."""
-        return [
-            Document(
-                page_content="Access Control: Limit system access to authorized users. Organizations must develop, document, and disseminate access control policies.",
-                metadata={"control_id": "AC-1", "title": "Access Control Policy and Procedures", "source": "NIST.SP.800-53r5", "section": "3.1"}
-            ),
-            Document(
-                page_content="Audit and Accountability: Organizations must determine which events require auditing and maintain detailed audit logs for security monitoring.",
-                metadata={"control_id": "AU-2", "title": "Audit Events", "source": "NIST.SP.800-53r5", "section": "3.2"}
-            ),
-            Document(
-                page_content="Identification and Authentication: Each user and device must be uniquely identified before being granted system access.",
-                metadata={"control_id": "IA-2", "title": "Identification and Authentication", "source": "NIST.SP.800-53r5", "section": "3.3"}
-            ),
-            Document(
-                page_content="System and Communications Protection: Monitor and control communications at system boundaries to prevent unauthorized information transfers.",
-                metadata={"control_id": "SC-7", "title": "Boundary Protection", "source": "NIST.SP.800-53r5", "section": "3.4"}
-            ),
-            Document(
-                page_content="Incident Response: Organizations must establish an incident response capability including preparation, detection, analysis, containment, eradication, and recovery.",
-                metadata={"control_id": "IR-4", "title": "Incident Handling", "source": "NIST.SP.800-53r5", "section": "3.5"}
-            ),
-        ]
-    
-    def _create_tools(self) -> List:
-        """Create LangChain tools for the agent."""
-        
-        @tool("nist_lookup")
-        def nist_lookup(query: str) -> str:
-            """
-            Search NIST/OSCAL controls and guidance.
-            Use for any NIST, OSCAL, or cybersecurity compliance question.
-            Returns relevant control text with metadata (Control ID, Title, Source, Section).
-            """
-            docs = self.retriever.get_relevant_documents(query)
-            
-            if not docs:
-                return "No relevant NIST/OSCAL controls found for this query."
-            
-            results = []
-            for doc in docs[:self.top_k]:
-                meta = doc.metadata
-                control_id = meta.get('control_id', 'N/A')
-                title = meta.get('title', 'N/A')
-                source = meta.get('source', 'N/A')
-                section = meta.get('section', 'N/A')
-                
-                result = f"""
-**Control ID**: {control_id}
-**Title**: {title}
-**Source**: {source}
-**Section**: {section}
-**Content**: {doc.page_content}
----
-"""
-                results.append(result)
-            
-            return "\n".join(results)
-        
-        @tool("control_detail")
-        def control_detail(control_id: str) -> str:
-            """
-            Fetch detailed information for a specific NIST control by Control ID.
-            Use when the user asks about a specific control (e.g., AC-1, AU-2, IR-4).
-            """
-           ="*70)
-    print("NIST RAG Agent - Enhanced with HuggingFace Dataset")
-    print("="*70)
-    
-    print("\nInitializing agent...")
-    if HUGGINGFACE_AVAILABLE:
-        print("✓ HuggingFace dataset support available")
-        print("  First run will download ~7GB dataset (one-time)")
-    else:
-        print("⚠️  Using local embeddings (install 'datasets' for full coverage)")
-    
-    agent = NistRagAgent()
-    
-    # Show stats
-    stats = agent.get_stats()
-    print("\n📊 Agent Statistics:")
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
-    
-    print("\n" + "="*70)
-    print("Demo Queries")
-    print("="*70)
-    
-    # Example 1: General question
-    print("\n[Q1] What does NIST say about access control?")
-    response = agent.query(
-        "What does NIST say about access control?",
-        session_id="demo"
-    )
-    print(f"\n[A1] {response['answer']}\n")
-    
-    # Example 2: Specific control
-    print("\n[Q2] Tell me about AC-2")
-    response = agent.query(
-        "Tell me about AC-2",
-        session_id="demo"
-    )
-    print(f"\n[A2] {response['answer']}\n")
-    
-    # Example 3: CSF 2.0 (if using HuggingFace)
-    if agent.use_huggingface:
-        print("\n[Q3] What's new in NIST Cybersecurity Framework 2.0?")
-        response = agent.query(
-            "What's new in NIST Cybersecurity Framework 2.0?",
-            session_id="demo"
-        )
-        print(f"\n[A3] {response['answer']}\n")
-    
-    # Example 4: Follow-up question (uses chat history)
-    print("\n[Q4] What are the implementation requirements?")
-    response = agent.query(
-        "What are the implementation requirements?",
-        session_id="demo"
-    )
-    print(f"\n[A4] = ChatPromptTemplate.from_messages([
+        prompt = ChatPromptTemplate.from_messages([
             SystemMessage(
-                "You are a knowledgeable NIST/OSCAL assistant helping with cybersecurity compliance. "
-                "Prioritize tools in this order: 1) nist_lookup, 2) control_detail, 3) duckduckgo_search. "
-                "Always cite sources (Control ID, Title, Source) when using nist_lookup. "
-                "Make Control IDs easy to spot (use bold **AC-1** formatting). "
-                "Be concise and accurate. If you don't know something, say so clearly."
+                "You are a highly knowledgeable NIST cybersecurity expert assistant. "
+                "You have access to 596 NIST publications with 530,000+ training examples including:\n"
+                "- FIPS (Federal Information Processing Standards)\n"
+                "- SP 800 series (Security Controls, Risk Management, Cryptography, etc.)\n"
+                "- SP 1800 series (Practice Guides)\n"
+                "- NIST Cybersecurity Framework (CSF) 2.0\n"
+                "- CSWP (Cybersecurity White Papers on Zero Trust, PQC, IoT, etc.)\n"
+                "- IR (Interagency/Internal Reports)\n\n"
+                "Prioritize tools: 1) nist_lookup 2) control_lookup 3) search_by_document 4) web search\n"
+                "Always cite sources clearly with document names.\n"
+                "Format control IDs in bold (e.g., **AC-1**).\n"
+                "Be precise, thorough, and cite specific NIST guidance when available."
             ),
             MessagesPlaceholder(variable_name="chat_history"),
             HumanMessage("{input}"),
@@ -568,14 +433,12 @@ class NistRagAgent:
         
         agent = create_tool_calling_agent(self.llm, self.tools, prompt)
         
-        # Disable verbose in production to prevent log exposure
-        is_production = os.getenv("ENVIRONMENT", "development") == "production"
-        
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=not is_production,  # Only verbose in development
-            handle_parsing_errors=True
+            verbose=True,
+            handle_parsing_errors=True,
+            max_iterations=5
         )
     
     def _get_chat_history(self, session_id: str) -> ChatMessageHistory:
@@ -593,19 +456,12 @@ class NistRagAgent:
         Query the NIST RAG agent.
         
         Args:
-            question: User's question about NIST standards (already sanitized by API layer)
-            session_id: Session identifier for chat history (already sanitized by API layer)
+            question: User's question about NIST standards
+            session_id: Session identifier for chat history
             
         Returns:
-            Dict with 'answer' and metadata
+            Dict with 'answer', 'session_id', and metadata
         """
-        # Input should already be sanitized by API layer, but validate basics
-        if not question or len(question) > 2000:
-            raise ValueError("Invalid question length")
-        
-        if not session_id or len(session_id) > 64:
-            raise ValueError("Invalid session ID")
-        
         chat_history = self._get_chat_history(session_id)
         
         result = self.agent_executor.invoke({
@@ -625,43 +481,69 @@ class NistRagAgent:
     
     def clear_history(self, session_id: str = "default"):
         """Clear chat history for a session."""
-        # Validate session_id (defense in depth)
-        if not session_id or len(session_id) > 64:
-            raise ValueError("Invalid session ID")
-        
         if session_id in self.session_histories:
             self.session_histories[session_id].clear()
+    
+    def get_dataset_stats(self) -> Dict[str, Any]:
+        """Get statistics about the loaded dataset."""
+        return {
+            "total_examples": len(self.dataset),
+            "split": self.dataset_split,
+            "cache_dir": str(self.cache_dir),
+            "num_sessions": len(self.session_histories)
+        }
 
 
 # Example usage
 if __name__ == "__main__":
-    print("Initializing NIST RAG Agent...")
-    agent = NistRagAgent()
+    print("="*70)
+    print("NIST RAG Agent V2 - Enhanced with HuggingFace Dataset")
+    print("530K+ examples from 596 NIST publications")
+    print("="*70)
     
-    print("\n" + "="*60)
-    print("NIST RAG Agent - Demo")
-    print("="*60)
+    print("\nInitializing agent (first run will download dataset)...")
+    agent = NistRagAgentV2(
+        top_k=3,
+        dataset_split="train"
+    )
     
-    # Example 1: General question
-    print("\nQ: What does NIST say about access control?")
+    print("\nDataset Statistics:")
+    stats = agent.get_dataset_stats()
+    for key, value in stats.items():
+        print(f"  {key}: {value}")
+    
+    print("\n" + "="*70)
+    print("Demo Queries")
+    print("="*70)
+    
+    # Example 1: CSF 2.0 question
+    print("\n[Q1] What's new in NIST Cybersecurity Framework 2.0?")
     response = agent.query(
-        "What does NIST say about access control?",
+        "What's new in NIST Cybersecurity Framework 2.0?",
         session_id="demo"
     )
-    print(f"A: {response['answer']}\n")
+    print(f"\n[A1] {response['answer']}\n")
     
-    # Example 2: Specific control
-    print("\nQ: Tell me about AC-1")
+    # Example 2: Zero Trust
+    print("\n[Q2] What does NIST say about Zero Trust Architecture?")
     response = agent.query(
-        "Tell me about AC-1",
+        "What does NIST say about Zero Trust Architecture?",
         session_id="demo"
     )
-    print(f"A: {response['answer']}\n")
+    print(f"\n[A2] {response['answer']}\n")
     
-    # Example 3: Follow-up question (uses chat history)
-    print("\nQ: What are its requirements?")
+    # Example 3: Specific control
+    print("\n[Q3] Explain control AC-2 in detail")
     response = agent.query(
-        "What are its requirements?",
+        "Explain control AC-2 in detail",
         session_id="demo"
     )
-    print(f"A: {response['answer']}\n")
+    print(f"\n[A3] {response['answer']}\n")
+    
+    # Example 4: Follow-up using context
+    print("\n[Q4] What are the implementation requirements?")
+    response = agent.query(
+        "What are the implementation requirements?",
+        session_id="demo"
+    )
+    print(f"\n[A4] {response['answer']}\n")
